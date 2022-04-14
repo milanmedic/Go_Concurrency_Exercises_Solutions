@@ -20,17 +20,21 @@ package main
 import (
 	"errors"
 	"log"
+	"sync"
+	"time"
 )
 
 // SessionManager keeps track of all sessions from creation, updating
 // to destroying.
 type SessionManager struct {
+	sync.RWMutex
 	sessions map[string]Session
 }
 
 // Session stores the session's data
 type Session struct {
-	Data map[string]interface{}
+	Data       map[string]interface{}
+	lastUpdate time.Time
 }
 
 // NewSessionManager creates a new sessionManager
@@ -38,6 +42,8 @@ func NewSessionManager() *SessionManager {
 	m := &SessionManager{
 		sessions: make(map[string]Session),
 	}
+
+	go m.CleanOldSessions()
 
 	return m
 }
@@ -48,9 +54,12 @@ func (m *SessionManager) CreateSession() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	m.Lock()
+	defer m.Unlock()
 
 	m.sessions[sessionID] = Session{
-		Data: make(map[string]interface{}),
+		Data:       make(map[string]interface{}),
+		lastUpdate: time.Now(),
 	}
 
 	return sessionID, nil
@@ -63,6 +72,8 @@ var ErrSessionNotFound = errors.New("SessionID does not exists")
 // GetSessionData returns data related to session if sessionID is
 // found, errors otherwise
 func (m *SessionManager) GetSessionData(sessionID string) (map[string]interface{}, error) {
+	m.Lock()
+	defer m.Unlock()
 	session, ok := m.sessions[sessionID]
 	if !ok {
 		return nil, ErrSessionNotFound
@@ -77,12 +88,31 @@ func (m *SessionManager) UpdateSessionData(sessionID string, data map[string]int
 		return ErrSessionNotFound
 	}
 
+	m.Lock()
+	defer m.Unlock()
+
 	// Hint: you should renew expiry of the session here
 	m.sessions[sessionID] = Session{
-		Data: data,
+		Data:       data,
+		lastUpdate: time.Now(),
 	}
 
 	return nil
+}
+
+func (m *SessionManager) CleanOldSessions() {
+	tick := time.Tick(time.Second)
+	for {
+		<-tick
+		m.Lock()
+		for id, s := range m.sessions {
+			if time.Since(s.lastUpdate) >= time.Duration(5*time.Second) {
+				delete(m.sessions, id)
+
+			}
+		}
+		m.Unlock()
+	}
 }
 
 func main() {
